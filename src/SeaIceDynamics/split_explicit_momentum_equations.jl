@@ -1,6 +1,6 @@
 using Oceananigans: instantiated_location
 using Oceananigans.Architectures: convert_to_device, architecture
-using Oceananigans.BoundaryConditions: fill_halo_regions!
+using Oceananigans.BoundaryConditions: fill_halo_regions!, construct_boundary_conditions_kernels
 using Oceananigans.DistributedComputations: DistributedGrid
 using Oceananigans.Grids: AbstractGrid, halo_size, halo_size, topology, with_halo, peripheral_node,
                           LeftConnected, RightConnected, FullyConnected,
@@ -62,6 +62,24 @@ function maybe_extended_grid(solver::SplitExplicitSolver, grid::DistributedGrid)
         return with_halo(new_halos, grid)
     end
 end
+
+# The substeps update the velocities inside the connected halos, but `fill_halo_regions!` fills a wall's halo only
+# along the interior of the other direction. These boundary conditions fill the walls' halos across the connected
+# halos too, so that the corners where they meet follow the velocities there.
+corner_filling_boundary_conditions(u, grid) = u.boundary_conditions
+
+function corner_filling_boundary_conditions(u, grid::DistributedGrid)
+    loc = instantiated_location(u)
+    TX, TY, _ = topology(grid)
+    indices = (connected_range(TX, axes(u.data, 1), size(grid, loc)[1]),
+               connected_range(TY, axes(u.data, 2), size(grid, loc)[2]), Colon())
+    return construct_boundary_conditions_kernels(u.boundary_conditions, u.data, grid, loc, indices)
+end
+
+connected_range(T, axis, N) = Colon()
+connected_range(::Type{RightConnected}, axis, N) = 1:last(axis)
+connected_range(::Type{LeftConnected},  axis, N) = first(axis):N
+connected_range(::Type{FullyConnected}, axis, N) = first(axis):last(axis)
 
 function materialize_solver(mom::SplitExplicitMomentumEquation, grid)
     new_auxiliaries  = Auxiliaries(mom.rheology, grid)
@@ -150,8 +168,10 @@ function time_step_momentum!(model, dynamics::SplitExplicitMomentumEquation, Δt
     u_args = (u, grid, Δt, substeps, rheology, model_fields, free_drift, clock, coriolis, massmin, ℵmin, u_immersed_bc, top_stress, bottom_stress, basal_stress, u_forcing)
     v_args = (v, grid, Δt, substeps, rheology, model_fields, free_drift, clock, coriolis, massmin, ℵmin, v_immersed_bc, top_stress, bottom_stress, basal_stress, v_forcing)
 
-    u_fill_halo_args = (u.data, u.boundary_conditions, u.indices, instantiated_location(u), grid, u.communication_buffers)
-    v_fill_halo_args = (v.data, v.boundary_conditions, v.indices, instantiated_location(v), grid, v.communication_buffers)
+    u_bcs = corner_filling_boundary_conditions(u, grid)
+    v_bcs = corner_filling_boundary_conditions(v, grid)
+    u_fill_halo_args = (u.data, u_bcs, u.indices, instantiated_location(u), grid, u.communication_buffers)
+    v_fill_halo_args = (v.data, v_bcs, v.indices, instantiated_location(v), grid, v.communication_buffers)
     stresses_args    = (model_fields, grid, rheology, Δt, u_immersed_bc, v_immersed_bc)
 
     GC.@preserve v_args u_args u_fill_halo_args v_fill_halo_args stresses_args begin

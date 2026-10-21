@@ -7,7 +7,7 @@ using Oceananigans.Grids: AbstractGrid, halo_size, topology, with_halo, peripher
                           RightCenterFolded, RightFaceFolded,
                           LeftConnectedRightCenterFolded, LeftConnectedRightFaceFolded,
                           LeftConnectedRightCenterConnected, LeftConnectedRightFaceConnected
-using Oceananigans.Models.HydrostaticFreeSurfaceModels.SplitExplicitFreeSurfaces: split_explicit_kernel_size
+using Oceananigans.Grids: connected_range
 using Oceananigans.Utils: configure_kernel
 
 const ConnectedTopology = Union{LeftConnected, RightConnected, FullyConnected,
@@ -47,7 +47,7 @@ function SplitExplicitSolver(grid::DistributedGrid; substeps=120, extend_halos=t
     Nx, Ny, _ = size(grid)
     Hx, Hy, _ = halo_size(grid)
     TX, TY, _ = topology(grid)
-    kernel_sizes = map(split_explicit_kernel_size, (TX, TY), (Nx, Ny), (Hx, Hy))
+    kernel_sizes = map(connected_range, (TX, TY), (Nx, Ny), (Hx, Hy))
     return SplitExplicitSolver(substeps, KernelParameters(kernel_sizes...), true)
 end
 
